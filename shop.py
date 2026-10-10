@@ -5,22 +5,24 @@ import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
  
 # =========================
-# KOINZ - FORTNITE SHOP
+# KOINZ - FORTNITE ITEM SHOP
 # =========================
  
 W, H = 1080, 1920
 OUT_DIR = "stories"
 TOTAL_PAGES = 3
 COLS = 6
+MAX_ROWS = 9
+MAX_ITEMS_PER_PAGE = COLS * MAX_ROWS
  
 BG = (8, 7, 18)
 PURPLE = (153, 70, 255)
 WHITE = (255, 255, 255)
-MUTED = (205, 195, 220)
+MUTED = (205, 190, 225)
  
 API_URL = "https://fortnite-api.com/v2/shop?language=en"
  
-# Arabic text support
+# Arabic shaping support.
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
@@ -34,27 +36,13 @@ except ImportError:
  
 def get_font(size, bold=False):
     paths = [
-        (
-            "/usr/share/fonts/truetype/noto/"
-            "NotoSansArabic-Bold.ttf"
-            if bold else
-            "/usr/share/fonts/truetype/noto/"
-            "NotoSansArabic-Regular.ttf"
-        ),
-        (
-            "/usr/share/fonts/truetype/dejavu/"
-            "DejaVuSans-Bold.ttf"
-            if bold else
-            "/usr/share/fonts/truetype/dejavu/"
-            "DejaVuSans.ttf"
-        ),
-        (
-            "/usr/share/fonts/truetype/liberation2/"
-            "LiberationSans-Bold.ttf"
-            if bold else
-            "/usr/share/fonts/truetype/liberation2/"
-            "LiberationSans-Regular.ttf"
-        ),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold else
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+ 
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
+        if bold else
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
     ]
  
     for path in paths:
@@ -64,67 +52,21 @@ def get_font(size, bold=False):
     return ImageFont.load_default()
  
  
-def centered(draw, xy, text, font, fill,
-             arabic=False, shadow=False):
-    """
-    Center text. Arabic text is shaped first.
-    Shadow is black, soft and subtle.
-    """
+def centered(draw, xy, text, font, fill, arabic=False):
     if arabic:
         text = arabic_text(text)
  
-    x, y = xy
- 
-    if shadow:
-        # Create a separate layer for a soft black shadow.
-        shadow_layer = Image.new(
-            "RGBA", (W, H), (0, 0, 0, 0)
-        )
-        shadow_draw = ImageDraw.Draw(shadow_layer)
- 
-        try:
-            shadow_draw.text(
-                (x + 1, y + 3),
-                text,
-                font=font,
-                fill=(0, 0, 0, 205),
-                anchor="mm",
-                direction="ltr"
-            )
-        except (TypeError, ValueError):
-            shadow_draw.text(
-                (x + 1, y + 3),
-                text,
-                font=font,
-                fill=(0, 0, 0, 205),
-                anchor="mm"
-            )
- 
-        shadow_layer = shadow_layer.filter(
-            ImageFilter.GaussianBlur(3)
-        )
- 
-        # Composite shadow before drawing the white text.
-        if isinstance(draw, ImageDraw.ImageDraw):
-            draw._image.alpha_composite(shadow_layer)
- 
     try:
         draw.text(
-            (x, y),
+            xy,
             text,
             font=font,
             fill=fill,
             anchor="mm",
-            direction="ltr"
+            direction="rtl" if arabic else "ltr"
         )
     except (TypeError, ValueError):
-        draw.text(
-            (x, y),
-            text,
-            font=font,
-            fill=fill,
-            anchor="mm"
-        )
+        draw.text(xy, text, font=font, fill=fill, anchor="mm")
  
  
 def make_background():
@@ -134,15 +76,15 @@ def make_background():
  
     draw.ellipse(
         (-300, -240, 600, 450),
-        fill=(125, 35, 255, 100)
+        fill=(125, 35, 255, 105)
     )
     draw.ellipse(
         (600, 1250, 1400, 2050),
-        fill=(85, 20, 220, 80)
+        fill=(85, 20, 220, 90)
     )
  
     glow = glow.filter(ImageFilter.GaussianBlur(145))
-    return Image.alpha_composite(img, glow).convert("RGBA")
+    return Image.alpha_composite(img, glow).convert("RGB")
  
  
 def get_objects(entry):
@@ -216,7 +158,7 @@ def get_image_url(entry):
     for obj in objects:
         images = obj.get("images") or {}
  
-        # Prefer the standard item icon.
+        # Prefer the close-up locker icon.
         for key in ("icon", "smallIcon", "featured", "large"):
             if images.get(key):
                 return images[key]
@@ -236,6 +178,7 @@ def load_items():
  
     response = requests.get(API_URL, timeout=40)
     response.raise_for_status()
+ 
     payload = response.json()
  
     if payload.get("status") != 200:
@@ -255,7 +198,7 @@ def load_items():
         if not image_url:
             continue
  
-        name = get_name(entry).strip()
+        name = str(get_name(entry)).strip()
         unique_key = (name, image_url)
  
         if unique_key in seen:
@@ -270,7 +213,7 @@ def load_items():
         })
  
     if not items:
-        raise RuntimeError("No items with usable images found.")
+        raise RuntimeError("No items with usable images were found.")
  
     order = {
         "SKINS": 0,
@@ -294,6 +237,17 @@ def load_items():
  
  
 def split_into_three_pages(items):
+    # Six columns x nine rows = 54 items per page.
+    # Never generate a tenth row.
+    capacity = MAX_ITEMS_PER_PAGE * TOTAL_PAGES
+ 
+    if len(items) > capacity:
+        raise RuntimeError(
+            f"Found {len(items)} items, but 3 pages with "
+            f"maximum {MAX_ROWS} rows can display only "
+            f"{capacity} items. Increase TOTAL_PAGES if needed."
+        )
+ 
     total = len(items)
  
     return [
@@ -322,159 +276,175 @@ def download_image(url):
 def draw_header(img, page):
     draw = ImageDraw.Draw(img)
  
-    # Store name
+    # Store name.
     centered(
         draw,
         (W // 2, 48),
         "Koinz",
         get_font(55, True),
-        WHITE,
-        shadow=True
+        WHITE
     )
  
-    # Main Arabic heading
+    # Main Arabic heading.
     centered(
         draw,
         (W // 2, 108),
         "الشوب اليوم",
-        get_font(40, True),
-        WHITE,
-        arabic=True,
-        shadow=True
+        get_font(38, True),
+        (215, 175, 255),
+        arabic=True
     )
  
-    # Thin divider
+    # Divider under the heading.
     draw.rounded_rectangle(
-        (35, 150, W - 35, 154),
-        radius=2,
+        (35, 150, W - 35, 155),
+        radius=3,
         fill=PURPLE
     )
  
-    # Arabic store message
+    # Store message.
     centered(
         draw,
-        (W // 2, 184),
+        (W // 2, 183),
         "شحن فيبوكس حياكم الله علخاص",
-        get_font(24, False),
+        get_font(23, True),
         WHITE,
-        arabic=True,
-        shadow=True
+        arabic=True
     )
  
-    # Page indicator
+    # Page indicator.
     centered(
         draw,
         (W // 2, 222),
         f"الصفحة {page} من {TOTAL_PAGES}",
-        get_font(20, False),
+        get_font(20, True),
         MUTED,
-        arabic=True,
-        shadow=True
+        arabic=True
     )
  
  
-def fit_item_image(source, size):
-    # Crop transparent borders so the icon looks closer.
+def fit_item_image(source, width, height):
+    # Remove transparent borders so the item looks closer.
     bbox = source.getchannel("A").getbbox()
  
     if bbox:
         source = source.crop(bbox)
  
+    # Fit into the image area without cropping the actual item.
     source.thumbnail(
-        (size, size),
+        (width, height),
         Image.Resampling.LANCZOS
     )
  
     canvas = Image.new(
         "RGBA",
-        (size, size),
+        (width, height),
         (0, 0, 0, 0)
     )
  
-    x = (size - source.width) // 2
-    y = (size - source.height) // 2
-    canvas.alpha_composite(source, (x, y))
+    x = (width - source.width) // 2
+    y = (height - source.height) // 2
  
+    canvas.alpha_composite(source, (x, y))
     return canvas
  
  
-def draw_item(img, item, index, rows, cols, layout):
-    draw = ImageDraw.Draw(img)
+def fit_name_font(draw, name, max_width):
+    # Keep the existing DejaVu/Liberation font style.
+    # Reduce size only when needed so the name remains visible.
+    for size in range(17, 9, -1):
+        font = get_font(size, True)
+        bbox = draw.textbbox((0, 0), name, font=font)
+        text_width = bbox[2] - bbox[0]
  
+        if text_width <= max_width:
+            return font
+ 
+    return get_font(10, True)
+ 
+ 
+def draw_item(img, item, index, rows, cols, layout):
     left, right = 22, 22
     gap_x, gap_y = 6, 6
  
-    top_limit = layout["top"]
-    bottom_limit = layout["top"] + layout["height"]
- 
-    available_w = (
+    cell_w = (
         W - left - right - gap_x * (cols - 1)
-    )
-    available_h = (
-        bottom_limit - top_limit - gap_y * (rows - 1)
-    )
+    ) // cols
  
-    # Square cells sized to fit the full grid.
-    cell = max(
-        1,
-        min(available_w // cols, available_h // rows)
+    # Keep cards compact to fit up to nine rows.
+    cell_h = cell_w
+ 
+    grid_height = rows * cell_h + (rows - 1) * gap_y
+ 
+    top = layout["top"] + max(
+        0,
+        (layout["height"] - grid_height) // 2
     )
- 
-    grid_w = cols * cell + (cols - 1) * gap_x
-    grid_h = rows * cell + (rows - 1) * gap_y
- 
-    start_x = (W - grid_w) // 2
-    start_y = top_limit + (layout["height"] - grid_h) // 2
  
     row = index // cols
     col = index % cols
  
-    x = start_x + col * (cell + gap_x)
-    y = start_y + row * (cell + gap_y)
+    x = left + col * (cell_w + gap_x)
+    y = top + row * (cell_h + gap_y)
  
+    draw = ImageDraw.Draw(img)
+ 
+    # Card style remains unchanged.
     draw.rounded_rectangle(
-        (x, y, x + cell, y + cell),
+        (x, y, x + cell_w, y + cell_h),
         radius=10,
         fill=(22, 17, 39),
-        outline=(70, 49, 100),
-        width=1
+        outline=(88, 47, 139),
+        width=2
     )
  
-    label_h = max(28, min(38, cell // 5))
-    image_size = max(1, cell - 10 - label_h)
+    # Reserve a dedicated strip for the item name.
+    label_height = 34
+    image_top = y + 4
+    image_bottom = y + cell_h - label_height - 3
+    image_w = cell_w - 10
+    image_h = image_bottom - image_top
  
     source = download_image(item["image"])
  
     if source:
-        icon_img = fit_item_image(source, image_size)
-        px = x + (cell - image_size) // 2
-        py = y + 3
-        img.alpha_composite(icon_img, (px, py))
+        icon_img = fit_item_image(
+            source,
+            image_w,
+            image_h
+        )
  
-    # Item name only. No price.
-    name = item["name"].strip()
-    font_size = max(11, min(17, cell // 10))
-    font = get_font(font_size, True)
+        px = x + (cell_w - image_w) // 2
+        py = image_top + (image_h - icon_img.height) // 2
  
-    max_text_width = cell - 8
+        img.paste(icon_img, (px, py), icon_img)
  
-    while name and draw.textbbox((0, 0), name, font=font)[2] > max_text_width:
-        name = name[:-2].rstrip() + "…"
+    # Item name only: no price or extra label.
+    name = str(item["name"]).strip()
+ 
+    # Keep long names on one line by shrinking the font.
+    name_font = fit_name_font(
+        draw,
+        name,
+        cell_w - 8
+    )
  
     centered(
         draw,
-        (x + cell // 2, y + cell - label_h // 2),
+        (
+            x + cell_w // 2,
+            y + cell_h - label_height // 2
+        ),
         name,
-        font,
-        WHITE,
-        shadow=True
+        name_font,
+        WHITE
     )
  
  
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
  
-    # Remove previous images so only today's 3 remain.
+    # Remove old images to prevent stale story files.
     for filename in os.listdir(OUT_DIR):
         if filename.lower().endswith((".jpg", ".jpeg", ".png")):
             os.remove(os.path.join(OUT_DIR, filename))
@@ -483,14 +453,22 @@ def main():
     pages = split_into_three_pages(items)
  
     print(f"Items with usable images: {len(items)}")
-    print("Generating exactly 3 story images...")
+    print("Generating 3 story images, with a maximum of 9 rows each...")
  
     for page_num, page_items in enumerate(pages, start=1):
         img = make_background()
         draw_header(img, page_num)
  
         cols = COLS
-        rows = max(1, math.ceil(len(page_items) / cols))
+        rows = max(
+            1,
+            math.ceil(len(page_items) / cols)
+        )
+ 
+        if rows > MAX_ROWS:
+            raise RuntimeError(
+                f"Page {page_num} has {rows} rows; maximum is {MAX_ROWS}."
+            )
  
         layout = {
             "top": 255,
@@ -512,7 +490,7 @@ def main():
             f"shop-{page_num:02d}.jpg"
         )
  
-        img.convert("RGB").save(
+        img.save(
             output,
             "JPEG",
             quality=94,
@@ -520,7 +498,7 @@ def main():
         )
  
         print(
-            f"Saved {output}: {len(page_items)} items"
+            f"Saved {output}: {len(page_items)} items, {rows} rows"
         )
  
     print("Done: exactly 3 story images generated.")
@@ -528,4 +506,3 @@ def main():
  
 if __name__ == "__main__":
     main()
- 
