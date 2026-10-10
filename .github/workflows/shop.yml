@@ -1,9 +1,9 @@
 name: Fortnite Shop Story
 
-on:
+‘on’:
 workflow_dispatch:
 schedule:
-- cron: “0 0 * * *”
+ concurrency: - cron: ‘0 0 * * *’
 
 jobs:
 build:
@@ -15,7 +15,7 @@ steps:
   - name: Set up Python
     uses: actions/setup-python@v5
     with:
-      python-version: "3.12"
+      python-version: '3.12'
   - name: Install dependencies
     run: |
       pip install -r requirements.txt
@@ -28,4 +28,4 @@ steps:
     with:
       name: fortnite-shop-stories
       path: stories/*.jpg
-      if-no-files-found: error
+      if-no-files-found: error 
