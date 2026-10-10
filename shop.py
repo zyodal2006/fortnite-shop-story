@@ -155,7 +155,6 @@ if __name__ == "__main__":
     main()
  
 Advertisement
-Withdrew $12k in 15 minutes. Try now
 Hottest instagram selfies
 Hello! Wanna date me?
 Your ISP is logging you. Block them now
