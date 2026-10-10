@@ -5,7 +5,7 @@ import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
  
 # =========================
-# KOINZ - FORTNITE ITEM SHOP
+# KOINZ - FORTNITE SHOP
 # =========================
  
 W, H = 1080, 1920
@@ -16,11 +16,11 @@ COLS = 6
 BG = (8, 7, 18)
 PURPLE = (153, 70, 255)
 WHITE = (255, 255, 255)
-MUTED = (205, 190, 225)
+MUTED = (205, 195, 220)
  
 API_URL = "https://fortnite-api.com/v2/shop?language=en"
  
-# Optional Arabic shaping libraries.
+# Arabic text support
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
@@ -34,13 +34,27 @@ except ImportError:
  
 def get_font(size, bold=False):
     paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        if bold else
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
- 
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
-        if bold else
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        (
+            "/usr/share/fonts/truetype/noto/"
+            "NotoSansArabic-Bold.ttf"
+            if bold else
+            "/usr/share/fonts/truetype/noto/"
+            "NotoSansArabic-Regular.ttf"
+        ),
+        (
+            "/usr/share/fonts/truetype/dejavu/"
+            "DejaVuSans-Bold.ttf"
+            if bold else
+            "/usr/share/fonts/truetype/dejavu/"
+            "DejaVuSans.ttf"
+        ),
+        (
+            "/usr/share/fonts/truetype/liberation2/"
+            "LiberationSans-Bold.ttf"
+            if bold else
+            "/usr/share/fonts/truetype/liberation2/"
+            "LiberationSans-Regular.ttf"
+        ),
     ]
  
     for path in paths:
@@ -50,21 +64,67 @@ def get_font(size, bold=False):
     return ImageFont.load_default()
  
  
-def centered(draw, xy, text, font, fill, arabic=False):
+def centered(draw, xy, text, font, fill,
+             arabic=False, shadow=False):
+    """
+    Center text. Arabic text is shaped first.
+    Shadow is black, soft and subtle.
+    """
     if arabic:
         text = arabic_text(text)
  
+    x, y = xy
+ 
+    if shadow:
+        # Create a separate layer for a soft black shadow.
+        shadow_layer = Image.new(
+            "RGBA", (W, H), (0, 0, 0, 0)
+        )
+        shadow_draw = ImageDraw.Draw(shadow_layer)
+ 
+        try:
+            shadow_draw.text(
+                (x + 1, y + 3),
+                text,
+                font=font,
+                fill=(0, 0, 0, 205),
+                anchor="mm",
+                direction="ltr"
+            )
+        except (TypeError, ValueError):
+            shadow_draw.text(
+                (x + 1, y + 3),
+                text,
+                font=font,
+                fill=(0, 0, 0, 205),
+                anchor="mm"
+            )
+ 
+        shadow_layer = shadow_layer.filter(
+            ImageFilter.GaussianBlur(3)
+        )
+ 
+        # Composite shadow before drawing the white text.
+        if isinstance(draw, ImageDraw.ImageDraw):
+            draw._image.alpha_composite(shadow_layer)
+ 
     try:
         draw.text(
-            xy,
+            (x, y),
             text,
             font=font,
             fill=fill,
             anchor="mm",
-            direction="rtl" if arabic else "ltr"
+            direction="ltr"
         )
     except (TypeError, ValueError):
-        draw.text(xy, text, font=font, fill=fill, anchor="mm")
+        draw.text(
+            (x, y),
+            text,
+            font=font,
+            fill=fill,
+            anchor="mm"
+        )
  
  
 def make_background():
@@ -74,15 +134,15 @@ def make_background():
  
     draw.ellipse(
         (-300, -240, 600, 450),
-        fill=(125, 35, 255, 105)
+        fill=(125, 35, 255, 100)
     )
     draw.ellipse(
         (600, 1250, 1400, 2050),
-        fill=(85, 20, 220, 90)
+        fill=(85, 20, 220, 80)
     )
  
     glow = glow.filter(ImageFilter.GaussianBlur(145))
-    return Image.alpha_composite(img, glow).convert("RGB")
+    return Image.alpha_composite(img, glow).convert("RGBA")
  
  
 def get_objects(entry):
@@ -156,7 +216,7 @@ def get_image_url(entry):
     for obj in objects:
         images = obj.get("images") or {}
  
-        # Prefer the close-up locker icon.
+        # Prefer the standard item icon.
         for key in ("icon", "smallIcon", "featured", "large"):
             if images.get(key):
                 return images[key]
@@ -176,7 +236,6 @@ def load_items():
  
     response = requests.get(API_URL, timeout=40)
     response.raise_for_status()
- 
     payload = response.json()
  
     if payload.get("status") != 200:
@@ -211,7 +270,7 @@ def load_items():
         })
  
     if not items:
-        raise RuntimeError("No items with usable images were found.")
+        raise RuntimeError("No items with usable images found.")
  
     order = {
         "SKINS": 0,
@@ -263,55 +322,59 @@ def download_image(url):
 def draw_header(img, page):
     draw = ImageDraw.Draw(img)
  
-    # Store name.
+    # Store name
     centered(
         draw,
         (W // 2, 48),
         "Koinz",
         get_font(55, True),
-        WHITE
+        WHITE,
+        shadow=True
     )
  
-    # Main Arabic heading.
+    # Main Arabic heading
     centered(
         draw,
         (W // 2, 108),
         "الشوب اليوم",
-        get_font(38, True),
-        (215, 175, 255),
-        arabic=True
+        get_font(40, True),
+        WHITE,
+        arabic=True,
+        shadow=True
     )
  
-    # Divider under the heading.
+    # Thin divider
     draw.rounded_rectangle(
-        (35, 150, W - 35, 155),
-        radius=3,
+        (35, 150, W - 35, 154),
+        radius=2,
         fill=PURPLE
     )
  
-    # Store's message.
+    # Arabic store message
     centered(
         draw,
-        (W // 2, 183),
+        (W // 2, 184),
         "شحن فيبوكس حياكم الله علخاص",
-        get_font(23, True),
+        get_font(24, False),
         WHITE,
-        arabic=True
+        arabic=True,
+        shadow=True
     )
  
-    # Page indicator.
+    # Page indicator
     centered(
         draw,
         (W // 2, 222),
         f"الصفحة {page} من {TOTAL_PAGES}",
-        get_font(20, True),
+        get_font(20, False),
         MUTED,
-        arabic=True
+        arabic=True,
+        shadow=True
     )
  
  
 def fit_item_image(source, size):
-    # Crop empty transparent borders to enlarge the icon.
+    # Crop transparent borders so the icon looks closer.
     bbox = source.getchannel("A").getbbox()
  
     if bbox:
@@ -330,8 +393,8 @@ def fit_item_image(source, size):
  
     x = (size - source.width) // 2
     y = (size - source.height) // 2
- 
     canvas.alpha_composite(source, (x, y))
+ 
     return canvas
  
  
@@ -341,69 +404,77 @@ def draw_item(img, item, index, rows, cols, layout):
     left, right = 22, 22
     gap_x, gap_y = 6, 6
  
-    cell_w = (
+    top_limit = layout["top"]
+    bottom_limit = layout["top"] + layout["height"]
+ 
+    available_w = (
         W - left - right - gap_x * (cols - 1)
-    ) // cols
- 
-    # Make each card square.
-    cell_h = cell_w
- 
-    grid_height = rows * cell_h + (rows - 1) * gap_y
-    top = layout["top"] + max(
-        0,
-        (layout["height"] - grid_height) // 2
     )
+    available_h = (
+        bottom_limit - top_limit - gap_y * (rows - 1)
+    )
+ 
+    # Square cells sized to fit the full grid.
+    cell = max(
+        1,
+        min(available_w // cols, available_h // rows)
+    )
+ 
+    grid_w = cols * cell + (cols - 1) * gap_x
+    grid_h = rows * cell + (rows - 1) * gap_y
+ 
+    start_x = (W - grid_w) // 2
+    start_y = top_limit + (layout["height"] - grid_h) // 2
  
     row = index // cols
     col = index % cols
  
-    x = left + col * (cell_w + gap_x)
-    y = top + row * (cell_h + gap_y)
+    x = start_x + col * (cell + gap_x)
+    y = start_y + row * (cell + gap_y)
  
-    # Square card with subtle purple border.
     draw.rounded_rectangle(
-        (x, y, x + cell_w, y + cell_h),
+        (x, y, x + cell, y + cell),
         radius=10,
         fill=(22, 17, 39),
-        outline=(88, 47, 139),
-        width=2
+        outline=(70, 49, 100),
+        width=1
     )
  
-    label_height = 35
-    image_size = cell_w - 12
+    label_h = max(28, min(38, cell // 5))
+    image_size = max(1, cell - 10 - label_h)
  
     source = download_image(item["image"])
  
     if source:
         icon_img = fit_item_image(source, image_size)
- 
-        px = x + (cell_w - image_size) // 2
+        px = x + (cell - image_size) // 2
         py = y + 3
+        img.alpha_composite(icon_img, (px, py))
  
-        img.paste(icon_img, (px, py), icon_img)
- 
-    # Item name only. No prices.
+    # Item name only. No price.
     name = item["name"].strip()
-    max_chars = max(9, cell_w // 9)
+    font_size = max(11, min(17, cell // 10))
+    font = get_font(font_size, True)
  
-    if len(name) > max_chars:
-        name = name[:max_chars - 1].rstrip() + "…"
+    max_text_width = cell - 8
  
-    font_size = 15 if len(name) > 15 else 17
+    while name and draw.textbbox((0, 0), name, font=font)[2] > max_text_width:
+        name = name[:-2].rstrip() + "…"
  
     centered(
         draw,
-        (x + cell_w // 2, y + cell_h - label_height // 2 - 2),
+        (x + cell // 2, y + cell - label_h // 2),
         name,
-        get_font(font_size, True),
-        WHITE
+        font,
+        WHITE,
+        shadow=True
     )
  
  
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
  
-    # Remove old images to prevent extra pages.
+    # Remove previous images so only today's 3 remain.
     for filename in os.listdir(OUT_DIR):
         if filename.lower().endswith((".jpg", ".jpeg", ".png")):
             os.remove(os.path.join(OUT_DIR, filename))
@@ -412,7 +483,7 @@ def main():
     pages = split_into_three_pages(items)
  
     print(f"Items with usable images: {len(items)}")
-    print("Generating 3 square-grid story images...")
+    print("Generating exactly 3 story images...")
  
     for page_num, page_items in enumerate(pages, start=1):
         img = make_background()
@@ -441,7 +512,7 @@ def main():
             f"shop-{page_num:02d}.jpg"
         )
  
-        img.save(
+        img.convert("RGB").save(
             output,
             "JPEG",
             quality=94,
@@ -457,3 +528,4 @@ def main():
  
 if __name__ == "__main__":
     main()
+ 
