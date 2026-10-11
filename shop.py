@@ -301,7 +301,72 @@ def post_to_instagram():
         print("Instagram credentials not found in environment variables. Skipping upload.")
         return
 
-    print("Instagram publishing integration is ready. Make sure images have public URLs or are hosted.")
+    if not os.path.exists(OUT_DIR):
+        print("Stories directory not found.")
+        return
+
+    image_files = sorted([os.path.join(OUT_DIR, f) for f in os.listdir(OUT_DIR) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
+    
+    if not image_files:
+        print("No story images found to publish.")
+        return
+
+    print(f"Found {len(image_files)} story images to publish to Instagram...")
+
+    for img_path in image_files:
+        print(f"Uploading {img_path} to public host...")
+        try:
+            with open(img_path, "rb") as f:
+                response = requests.post(
+                    "https://catbox.moe/user/api.php",
+                    data={"reqtype": "fileupload"},
+                    files={"fileToUpload": f},
+                    timeout=30
+                )
+                response.raise_for_status()
+                public_url = response.text.strip()
+            
+            if not public_url.startswith("http"):
+                print(f"Failed to get public URL for {img_path}: {public_url}")
+                continue
+                
+            print(f"Public URL obtained: {public_url}")
+
+            # Step 1: Create IG Story Container
+            container_url = f"https://graph.facebook.com/v19.0/{account_id}/media"
+            payload = {
+                "image_url": public_url,
+                "media_type": "STORIES",
+                "access_token": access_token
+            }
+            res = requests.post(container_url, data=payload, timeout=30)
+            res_data = res.json()
+            
+            if "id" not in res_data:
+                print(f"Error creating media container for {img_path}: {res_data}")
+                continue
+                
+            creation_id = res_data["id"]
+            print(f"Media container created: {creation_id}. Publishing...")
+
+            # Step 2: Publish Media Container
+            publish_url = f"https://graph.facebook.com/v19.0/{account_id}/media_publish"
+            pub_payload = {
+                "creation_id": creation_id,
+                "access_token": access_token
+            }
+            pub_res = requests.post(publish_url, data=pub_payload, timeout=30)
+            pub_data = pub_res.json()
+
+            if "id" in pub_data:
+                print(f"Successfully published {img_path} to Instagram! Post ID: {pub_data['id']}")
+            else:
+                print(f"Error publishing {img_path}: {pub_data}")
+
+            time.sleep(5)
+            
+        except Exception as exc:
+            print(f"Exception during Instagram publishing for {img_path}: {exc}")
 
 
 def main():
