@@ -1,9 +1,9 @@
-name: Fortnite Shop Story
+Name: Fortnite Shop Story
 
 'on':
   workflow_dispatch: {}
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '55 19 * * *'
 
 jobs:
   build:
