@@ -321,6 +321,7 @@ def post_to_instagram():
                     "https://catbox.moe/user/api.php",
                     data={"reqtype": "fileupload"},
                     files={"fileToUpload": f},
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
                     timeout=30
                 )
                 response.raise_for_status()
