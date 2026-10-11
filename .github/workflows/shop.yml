@@ -3,7 +3,7 @@ name: Fortnite Shop Story
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '15 20 * * *'
+    - cron: '05 21 * * *'
 
 jobs:
   build:
@@ -15,20 +15,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y fonts-noto-core fonts-noto-extra
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generate shop story images
-        run: python shop.py
-
-      - name: Save generated images
-        uses: actions/upload-artifact@v4
-        with:
-          name: fortnite-shop-stories
-          path: stories/*.jpg
-          if-no-files-found: error
+      - name: Run Fortnite Shop Story Script
+        env:
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          INSTAGRAM_ACCOUNT_ID: ${{ secrets.INSTAGRAM_ACCOUNT_ID }}
+        run: |
+          python shop.py
