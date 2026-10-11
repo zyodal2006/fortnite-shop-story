@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 W, H = 1080, 1920
 OUT_DIR = "stories"
-LOGO_PATH = "store_logo.jpeg"  # Put your uploaded store logo in the repository root with this filename.
+LOGO_PATH = "fortmite pfp.png"  # Put your uploaded store logo in the repository root with this filename.
 
 COLS = 6
 MAX_ROWS = 10
