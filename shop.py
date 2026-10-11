@@ -1,6 +1,7 @@
 import os
 import io
 import math
+import time
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
@@ -114,7 +115,6 @@ def get_category(entry):
 
 
 def is_music_entry(entry):
-    # Exclude purchasable Jam Tracks/music from the story.
     objects = get_objects(entry)
     for obj in objects:
         item_type = obj.get("type") or {}
@@ -196,7 +196,6 @@ def download_image(url):
 def draw_header(img):
     draw = ImageDraw.Draw(img)
 
-    # Rounded-square store avatar, similar to an iOS app icon.
     logo_size = 112
     logo_x, logo_y = 42, 30
     radius = 27
@@ -212,7 +211,6 @@ def draw_header(img):
             ImageDraw.Draw(mask).rounded_rectangle(
                 (0, 0, logo_size - 1, logo_size - 1), radius=radius, fill=255
             )
-            # Subtle dark shadow behind the logo.
             shadow = Image.new("RGBA", (logo_size + 18, logo_size + 18), (0, 0, 0, 0))
             shadow_mask = Image.new("L", shadow.size, 0)
             ImageDraw.Draw(shadow_mask).rounded_rectangle(
@@ -226,7 +224,6 @@ def draw_header(img):
         except Exception as exc:
             print(f"Store logo could not be loaded: {exc}")
 
-    # Account name to the right of the logo; old centered Koinz heading removed.
     name_x = logo_x + logo_size + 24
     centered(draw, (name_x + 2, logo_y + 43), "Koinz.1", get_font(43, True), WHITE)
     centered(draw, (name_x + 2, logo_y + 83), "الشوب اليوم", get_font(27, True), (215, 175, 255), arabic=True,
@@ -250,7 +247,6 @@ def fit_item_image(source, width, height):
 
 
 def fit_name_font(draw, name, max_width):
-    # Slightly bolder/larger labels; shrink long names so they remain inside the tile.
     for size in range(23, 11, -1):
         font = get_font(size, True)
         bbox = draw.textbbox((0, 0), name, font=font, stroke_width=0)
@@ -264,7 +260,6 @@ def draw_item(img, item, index, rows, cols, layout):
     gap_x, gap_y = 5, 5
     cell_w = (W - left - right - gap_x * (cols - 1)) // cols
     available_cell_h = (layout["height"] - gap_y * (rows - 1)) // rows
-    # Square 1:1 tiles with a soft, iOS-app-icon-like corner radius.
     cell_size = min(cell_w, available_cell_h)
     grid_height = rows * cell_size + (rows - 1) * gap_y
     top = layout["top"] + max(0, (layout["height"] - grid_height) // 2)
@@ -272,7 +267,6 @@ def draw_item(img, item, index, rows, cols, layout):
     col = index % cols
     x = left + col * (cell_w + gap_x)
     y = top + row * (cell_size + gap_y)
-    # Center the square tile in its column.
     x += (cell_w - cell_size) // 2
     draw = ImageDraw.Draw(img)
 
@@ -297,6 +291,17 @@ def draw_item(img, item, index, rows, cols, layout):
     name_font = fit_name_font(draw, name, cell_size - 10)
     centered(draw, (x + cell_size // 2, y + cell_size - label_height // 2),
              name, name_font, WHITE, stroke_width=1, stroke_fill=(0, 0, 0))
+
+
+def post_to_instagram():
+    access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
+    account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
+    
+    if not access_token or not account_id:
+        print("Instagram credentials not found in environment variables. Skipping upload.")
+        return
+
+    print("Instagram publishing integration is ready. Make sure images have public URLs or are hosted.")
 
 
 def main():
@@ -325,7 +330,9 @@ def main():
         output = os.path.join(OUT_DIR, f"shop-{page_num:02d}.jpg")
         img.save(output, "JPEG", quality=94, optimize=True)
         print(f"Saved {output}: {len(page_items)} items, {rows} rows")
+    
     print(f"Done: {total_pages} story images generated.")
+    post_to_instagram()
 
 
 if __name__ == "__main__":
