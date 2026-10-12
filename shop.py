@@ -2,6 +2,7 @@ import os
 import io
 import math
 import time
+import hashlib
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
@@ -11,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 W, H = 1080, 1920
 OUT_DIR = "stories"
-LOGO_PATH = "fortmite pfp.png"  # Put your uploaded store logo in the repository root with this filename.
+LOGO_PATH = "fortmite pfp.png"
 
 COLS = 6
 MAX_ROWS = 10
@@ -23,6 +24,7 @@ WHITE = (255, 255, 255)
 MUTED = (205, 190, 225)
 
 API_URL = "https://fortnite-api.com/v2/shop?language=en"
+GRAPH_API_VERSION = "v25.0"
 
 # Arabic shaping support.
 try:
@@ -195,7 +197,6 @@ def download_image(url):
 
 def draw_header(img):
     draw = ImageDraw.Draw(img)
-
     logo_size = 112
     logo_x, logo_y = 42, 30
     radius = 27
@@ -226,11 +227,10 @@ def draw_header(img):
 
     name_x = logo_x + logo_size + 24
     centered(draw, (name_x + 2, logo_y + 43), "Koinz.1", get_font(43, True), WHITE)
-    centered(draw, (name_x + 2, logo_y + 83), "الشوب اليوم", get_font(27, True), (215, 175, 255), arabic=True,
+    centered(draw, (name_x + 2, logo_y + 83), "Ø§ÙØ´ÙØ¨ Ø§ÙÙÙÙ", get_font(27, True), (215, 175, 255), arabic=True,
              stroke_width=1, stroke_fill=(0, 0, 0))
-
     draw.rounded_rectangle((35, 165, W - 35, 170), radius=3, fill=PURPLE)
-    centered(draw, (W // 2, 199), "شحن فيبوكس حياكم الله علخاص",
+    centered(draw, (W // 2, 199), "Ø´ØÙ ÙÙØ¨ÙÙØ³ ØÙØ§ÙÙ Ø§ÙÙÙ Ø¹ÙØ®Ø§Øµ",
              get_font(23, True), WHITE, arabic=True, stroke_width=1, stroke_fill=(0, 0, 0))
 
 
@@ -269,12 +269,10 @@ def draw_item(img, item, index, rows, cols, layout):
     y = top + row * (cell_size + gap_y)
     x += (cell_w - cell_size) // 2
     draw = ImageDraw.Draw(img)
-
     draw.rounded_rectangle(
         (x, y, x + cell_size - 1, y + cell_size - 1),
         radius=25, fill=(22, 17, 39), outline=(88, 47, 139), width=2
     )
-
     label_height = 35
     image_top = y + 4
     image_bottom = y + cell_size - label_height - 3
@@ -286,88 +284,136 @@ def draw_item(img, item, index, rows, cols, layout):
         px = x + (cell_size - icon_img.width) // 2
         py = image_top + (image_h - icon_img.height) // 2
         img.paste(icon_img, (px, py), icon_img)
-
     name = str(item["name"]).strip()
     name_font = fit_name_font(draw, name, cell_size - 10)
     centered(draw, (x + cell_size // 2, y + cell_size - label_height // 2),
              name, name_font, WHITE, stroke_width=1, stroke_fill=(0, 0, 0))
 
 
+def cloudinary_upload(image_path):
+    """Upload an image using Cloudinary's signed upload API and return its public URL."""
+    cloud_name = os.environ.get("CLOUDINARY_CLOUD_NAME")
+    api_key = os.environ.get("CLOUDINARY_API_KEY")
+    api_secret = os.environ.get("CLOUDINARY_API_SECRET")
+    if not all((cloud_name, api_key, api_secret)):
+        raise RuntimeError(
+            "Missing Cloudinary secrets. Set CLOUDINARY_CLOUD_NAME, "
+            "CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in GitHub Actions."
+        )
+
+    timestamp = str(int(time.time()))
+    signature_base = f"timestamp={timestamp}{api_secret}"
+    signature = hashlib.sha1(signature_base.encode("utf-8")).hexdigest()
+    endpoint = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
+    with open(image_path, "rb") as image_file:
+        response = requests.post(
+            endpoint,
+            data={"timestamp": timestamp, "api_key": api_key, "signature": signature},
+            files={"file": image_file},
+            timeout=90,
+        )
+    try:
+        result = response.json()
+    except ValueError:
+        raise RuntimeError(f"Cloudinary returned non-JSON response (HTTP {response.status_code}).")
+    if not response.ok or not result.get("secure_url"):
+        raise RuntimeError(f"Cloudinary upload failed: {result}")
+    return result["secure_url"]
+
+
+def instagram_post_story(image_path, access_token, account_id):
+    public_url = cloudinary_upload(image_path)
+    print(f"Image uploaded to Cloudinary: {os.path.basename(image_path)}")
+
+    base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{account_id}"
+    create_response = requests.post(
+        f"{base_url}/media",
+        data={"image_url": public_url, "media_type": "STORIES", "access_token": access_token},
+        timeout=60,
+    )
+    try:
+        create_data = create_response.json()
+    except ValueError:
+        raise RuntimeError(f"Instagram container response was not JSON: HTTP {create_response.status_code}")
+    if not create_response.ok or not create_data.get("id"):
+        raise RuntimeError(f"Instagram could not create the Story container: {create_data}")
+
+    creation_id = create_data["id"]
+    print(f"Story container created for {os.path.basename(image_path)}; waiting for processing...")
+
+    # Wait for Meta to finish fetching and processing the image before publishing.
+    status_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{creation_id}"
+    ready = False
+    for attempt in range(12):
+        status_response = requests.get(
+            status_url,
+            params={"fields": "status_code,status", "access_token": access_token},
+            timeout=30,
+        )
+        try:
+            status_data = status_response.json()
+        except ValueError:
+            status_data = {}
+        if not status_response.ok or status_data.get("error"):
+            raise RuntimeError(f"Could not check Instagram container status: {status_data}")
+        status_code = str(status_data.get("status_code", "")).upper()
+        print(f"Instagram processing status ({attempt + 1}/12): {status_code or status_data.get('status', 'unknown')}")
+        if status_code == "FINISHED":
+            ready = True
+            break
+        if status_code in ("ERROR", "EXPIRED"):
+            raise RuntimeError(f"Instagram container failed: {status_data}")
+        time.sleep(5)
+    if not ready:
+        raise RuntimeError("Instagram did not finish processing the Story within 60 seconds.")
+
+    publish_response = requests.post(
+        f"{base_url}/media_publish",
+        data={"creation_id": creation_id, "access_token": access_token},
+        timeout=60,
+    )
+    try:
+        publish_data = publish_response.json()
+    except ValueError:
+        raise RuntimeError(f"Instagram publish response was not JSON: HTTP {publish_response.status_code}")
+    if not publish_response.ok or not publish_data.get("id"):
+        raise RuntimeError(f"Instagram failed to publish the Story: {publish_data}")
+    print(f"SUCCESS: Published {os.path.basename(image_path)} as Instagram Story. ID: {publish_data['id']}")
+
+
 def post_to_instagram():
     access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
     account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
-    
     if not access_token or not account_id:
-        print("Instagram credentials not found in environment variables. Skipping upload.")
-        return
+        raise RuntimeError(
+            "Instagram secrets are missing. Add INSTAGRAM_ACCESS_TOKEN and "
+            "INSTAGRAM_ACCOUNT_ID to GitHub Actions secrets and pass both to the workflow."
+        )
 
-    if not os.path.exists(OUT_DIR):
-        print("Stories directory not found.")
-        return
-
-    image_files = sorted([os.path.join(OUT_DIR, f) for f in os.listdir(OUT_DIR) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
-    
+    if not os.path.isdir(OUT_DIR):
+        raise RuntimeError(f"Stories directory not found: {OUT_DIR}")
+    image_files = sorted(
+        os.path.join(OUT_DIR, filename)
+        for filename in os.listdir(OUT_DIR)
+        if filename.lower().endswith((".jpg", ".jpeg", ".png"))
+    )
     if not image_files:
-        print("No story images found to publish.")
-        return
+        raise RuntimeError("No story images found to publish.")
 
-    print(f"Found {len(image_files)} story images to publish to Instagram...")
-
-    for img_path in image_files:
-        print(f"Uploading {img_path} to public host...")
+    print(f"Publishing {len(image_files)} image(s) to Instagram Stories...")
+    failures = []
+    for index, image_path in enumerate(image_files, start=1):
+        print(f"Publishing Story {index}/{len(image_files)}: {image_path}")
         try:
-            with open(img_path, "rb") as f:
-                response = requests.post(
-                    "https://catbox.moe/user/api.php",
-                    data={"reqtype": "fileupload"},
-                    files={"fileToUpload": f},
-                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-                    timeout=30
-                )
-                response.raise_for_status()
-                public_url = response.text.strip()
-            
-            if not public_url.startswith("http"):
-                print(f"Failed to get public URL for {img_path}: {public_url}")
-                continue
-                
-            print(f"Public URL obtained: {public_url}")
-
-            # Step 1: Create IG Story Container
-            container_url = f"https://graph.facebook.com/v19.0/{account_id}/media"
-            payload = {
-                "image_url": public_url,
-                "media_type": "STORIES",
-                "access_token": access_token
-            }
-            res = requests.post(container_url, data=payload, timeout=30)
-            res_data = res.json()
-            
-            if "id" not in res_data:
-                print(f"Error creating media container for {img_path}: {res_data}")
-                continue
-                
-            creation_id = res_data["id"]
-            print(f"Media container created: {creation_id}. Publishing...")
-
-            # Step 2: Publish Media Container
-            publish_url = f"https://graph.facebook.com/v19.0/{account_id}/media_publish"
-            pub_payload = {
-                "creation_id": creation_id,
-                "access_token": access_token
-            }
-            pub_res = requests.post(publish_url, data=pub_payload, timeout=30)
-            pub_data = pub_res.json()
-
-            if "id" in pub_data:
-                print(f"Successfully published {img_path} to Instagram! Post ID: {pub_data['id']}")
-            else:
-                print(f"Error publishing {img_path}: {pub_data}")
-
-            time.sleep(5)
-            
+            instagram_post_story(image_path, access_token, account_id)
         except Exception as exc:
-            print(f"Exception during Instagram publishing for {img_path}: {exc}")
+            failures.append(f"{image_path}: {exc}")
+            print(f"FAILED to publish {image_path}: {exc}")
+        if index < len(image_files):
+            time.sleep(5)
+    if failures:
+        raise RuntimeError("One or more Stories failed to publish:\n" + "\n".join(failures))
+    print("All Story images published successfully.")
 
 
 def main():
@@ -396,7 +442,7 @@ def main():
         output = os.path.join(OUT_DIR, f"shop-{page_num:02d}.jpg")
         img.save(output, "JPEG", quality=94, optimize=True)
         print(f"Saved {output}: {len(page_items)} items, {rows} rows")
-    
+
     print(f"Done: {total_pages} story images generated.")
     post_to_instagram()
 
