@@ -1,15 +1,13 @@
 name: Fortnite Shop Story
 
 on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
+  workflow_dispatch: {}
+  schedule:
+    - cron: '15 20 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -17,29 +15,21 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
-      - name: Install fonts
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y fonts-noto-core fonts-noto-extra
+          pip install -r requirements.txt
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Generate shop images
+      - name: Generate shop story images
         run: python shop.py
 
-      - name: Verify generated images
-        run: |
-          echo "Generated images:"
-          ls -lah stories/
-          test -n "$(find stories -maxdepth 1 -type f -name '*.jpg' -print -quit)"
-
-      - name: Upload story images
+      - name: Save generated images
         uses: actions/upload-artifact@v4
         with:
           name: fortnite-shop-stories
           path: stories/*.jpg
           if-no-files-found: error
-          retention-days: 7
+          
