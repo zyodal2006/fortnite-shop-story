@@ -1,19 +1,17 @@
 import os
 import io
 import math
-import time
-import hashlib
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # =========================
 # KOINZ - FORTNITE ITEM SHOP
+# Generates story images only. Upload them manually from GitHub Actions.
 # =========================
 
 W, H = 1080, 1920
 OUT_DIR = "stories"
 LOGO_PATH = "fortmite pfp.png"
-
 COLS = 6
 MAX_ROWS = 10
 MAX_ITEMS_PER_PAGE = COLS * MAX_ROWS
@@ -21,12 +19,9 @@ MAX_ITEMS_PER_PAGE = COLS * MAX_ROWS
 BG = (8, 7, 18)
 PURPLE = (153, 70, 255)
 WHITE = (255, 255, 255)
-MUTED = (205, 190, 225)
-
+MUTED = (220, 210, 235)
 API_URL = "https://fortnite-api.com/v2/shop?language=en"
-GRAPH_API_VERSION = "v25.0"
 
-# Arabic shaping support.
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
@@ -40,10 +35,8 @@ except ImportError:
 
 def get_font(size, bold=False):
     paths = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
-        if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
     ]
     for path in paths:
         if os.path.exists(path):
@@ -55,11 +48,9 @@ def centered(draw, xy, text, font, fill, arabic=False, stroke_width=0, stroke_fi
     if arabic:
         text = arabic_text(text)
     try:
-        draw.text(
-            xy, text, font=font, fill=fill, anchor="mm",
-            direction="rtl" if arabic else "ltr",
-            stroke_width=stroke_width, stroke_fill=stroke_fill
-        )
+        draw.text(xy, text, font=font, fill=fill, anchor="mm",
+                  direction="rtl" if arabic else "ltr",
+                  stroke_width=stroke_width, stroke_fill=stroke_fill)
     except (TypeError, ValueError):
         draw.text(xy, text, font=font, fill=fill, anchor="mm",
                   stroke_width=stroke_width, stroke_fill=stroke_fill)
@@ -68,79 +59,106 @@ def centered(draw, xy, text, font, fill, arabic=False, stroke_width=0, stroke_fi
 def make_background():
     img = Image.new("RGBA", (W, H), BG + (255,))
     glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(glow)
-    draw.ellipse((-300, -240, 600, 450), fill=(125, 35, 255, 105))
-    draw.ellipse((600, 1250, 1400, 2050), fill=(85, 20, 220, 90))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse((-320, -240, 620, 460), fill=(125, 35, 255, 100))
+    gd.ellipse((610, 1270, 1400, 2050), fill=(85, 20, 220, 90))
     glow = glow.filter(ImageFilter.GaussianBlur(145))
     return Image.alpha_composite(img, glow).convert("RGB")
 
 
-def get_objects(entry):
-    for key in ("brItems", "tracks", "instruments", "cars", "legoKits", "beans", "items"):
+def entry_objects(entry):
+    # brItems contains the Battle Royale items in a shop entry; keep the whole
+    # entry together so a skin and its included back bling remain one card.
+    value = entry.get("brItems")
+    if isinstance(value, list) and value:
+        return value
+    for key in ("items", "instruments", "beans", "legoKits"):
         value = entry.get(key)
         if isinstance(value, list) and value:
             return value
     return []
 
 
-def get_name(entry):
-    objects = get_objects(entry)
-    if objects:
-        obj = objects[0]
-        return obj.get("name") or obj.get("title") or entry.get("devName") or "Fortnite Item"
-    return entry.get("devName") or entry.get("name") or "Fortnite Item"
+def item_details(obj):
+    item_type = obj.get("type") or {}
+    return " ".join(str(v) for v in (
+        item_type.get("value", ""), item_type.get("displayValue", ""),
+        obj.get("name", ""), obj.get("description", "")
+    ) if v).lower()
 
 
 def get_category(entry):
-    objects = get_objects(entry)
-    if not objects:
+    objects = entry_objects(entry)
+    details = " ".join(item_details(obj) for obj in objects)
+    # Prefer the main item in a bundle, but classify by any included item.
+    if any(word in details for word in ("outfit", "skin")):
+        return "SKINS"
+    if any(word in details for word in ("emote", "dance")):
+        return "EMOTES"
+    if any(word in details for word in ("backpack", "back bling", "backbling")):
+        return "BACK BLINGS"
+    if any(word in details for word in ("shoe", "sneaker", "footwear")):
+        return "SNEAKERS"
+    if any(word in details for word in ("pickaxe", "harvesting tool")):
+        return "PICKAXES"
+    if any(word in details for word in ("glider", "wrap", "contrail", "toy", "spray", "emoji", "banner")):
         return "OTHER"
-    obj = objects[0]
-    item_type = obj.get("type") or {}
-    raw = (str(item_type.get("value", "")) + " " + str(item_type.get("displayValue", ""))).lower()
-    categories = [
-        (("outfit", "skin"), "SKINS"),
-        (("emote",), "EMOTES"),
-        (("pickaxe", "harvesting tool"), "PICKAXES"),
-        (("backpack", "back bling"), "BACK BLINGS"),
-        (("glider",), "GLIDERS"),
-        (("wrap",), "WRAPS"),
-        (("contrail",), "CONTRAILS"),
-        (("shoe", "sneaker"), "SNEAKERS"),
-        (("instrument",), "INSTRUMENTS"),
-        (("jam track", "music"), "MUSIC"),
-    ]
-    for keywords, category in categories:
-        if any(word in raw for word in keywords):
-            return category
     return "OTHER"
 
 
-def is_music_entry(entry):
-    objects = get_objects(entry)
-    for obj in objects:
-        item_type = obj.get("type") or {}
-        details = " ".join(str(value) for value in (
-            item_type.get("value", ""), item_type.get("displayValue", ""),
-            obj.get("name", ""), obj.get("title", ""), entry.get("devName", "")
-        ) if value).lower()
-        if "jam track" in details or "music track" in details:
-            return True
-    return get_category(entry) == "MUSIC"
+def is_excluded(entry):
+    objects = entry_objects(entry)
+    details = " ".join(item_details(obj) for obj in objects)
+    details += " " + str(entry.get("devName", "")).lower()
+    # Exclude music and vehicle-related cosmetics/items.
+    excluded = (
+        "jam track", "music track", "instrument", "car body", "vehicle",
+        "wheel", "wheels", "tire", "tyre", "boost", "vehicle wrap",
+        "car skin", "car paint", "sports car", " suv", "truck", "motorcycle",
+    )
+    return any(word in details for word in excluded)
 
 
-def get_image_url(entry):
-    objects = get_objects(entry)
-    for obj in objects:
-        images = obj.get("images") or {}
-        for key in ("icon", "smallIcon", "featured", "large"):
-            if images.get(key):
-                return images[key]
-    images = entry.get("images") or {}
-    for key in ("icon", "smallIcon", "featured", "large"):
+def best_image_url(obj):
+    images = obj.get("images") or {}
+    # Use larger artwork first to avoid blurry cards when zooming in.
+    for key in ("featured", "background", "large", "icon", "smallIcon"):
         if images.get(key):
             return images[key]
-    return (entry.get("bundle") or {}).get("image")
+    return None
+
+
+def get_entry_image_urls(entry):
+    urls = []
+    for obj in entry_objects(entry):
+        url = best_image_url(obj)
+        if url and url not in urls:
+            urls.append(url)
+    if not urls:
+        images = entry.get("images") or {}
+        for key in ("featured", "background", "large", "icon", "smallIcon"):
+            if images.get(key):
+                urls.append(images[key])
+                break
+    bundle_image = (entry.get("bundle") or {}).get("image")
+    if not urls and bundle_image:
+        urls.append(bundle_image)
+    return urls[:4]
+
+
+def get_entry_name(entry):
+    objects = entry_objects(entry)
+    if objects:
+        # Prefer a skin name when the entry contains a skin + accessories.
+        for obj in objects:
+            details = item_details(obj)
+            if "outfit" in details or "skin" in details:
+                return obj.get("name") or obj.get("title") or "Fortnite Bundle"
+        names = [obj.get("name") or obj.get("title") for obj in objects]
+        names = [str(n).strip() for n in names if n]
+        if names:
+            return " + ".join(names[:2])
+    return entry.get("devName") or entry.get("name") or "Fortnite Item"
 
 
 def load_items():
@@ -154,29 +172,29 @@ def load_items():
     if not entries:
         raise RuntimeError("No shop entries found.")
 
-    items, seen, skipped_music = [], set(), 0
+    items, seen, skipped = [], set(), 0
     for entry in entries:
-        if is_music_entry(entry):
-            skipped_music += 1
+        if is_excluded(entry):
+            skipped += 1
             continue
-        image_url = get_image_url(entry)
-        if not image_url:
+        urls = get_entry_image_urls(entry)
+        if not urls:
             continue
-        name = str(get_name(entry)).strip()
-        unique_key = (name, image_url)
-        if unique_key in seen:
+        name = str(get_entry_name(entry)).strip()
+        category = get_category(entry)
+        key = (name, tuple(urls))
+        if key in seen:
             continue
-        seen.add(unique_key)
-        items.append({"name": name, "image": image_url, "category": get_category(entry)})
+        seen.add(key)
+        items.append({"name": name, "images": urls, "category": category})
 
+    order = {"SKINS": 0, "EMOTES": 1, "BACK BLINGS": 2,
+             "SNEAKERS": 3, "PICKAXES": 4, "OTHER": 5}
+    items.sort(key=lambda item: order.get(item["category"], 5))
     if not items:
-        raise RuntimeError("No items with usable images were found.")
-    order = {"SKINS": 0, "EMOTES": 1, "PICKAXES": 2, "BACK BLINGS": 3,
-             "GLIDERS": 4, "WRAPS": 5, "CONTRAILS": 6, "SNEAKERS": 7,
-             "INSTRUMENTS": 8, "OTHER": 9}
-    items.sort(key=lambda item: order.get(item["category"], 9))
-    print(f"Excluded music entries: {skipped_music}")
-    print(f"Items with usable images: {len(items)}")
+        raise RuntimeError("No eligible shop items with usable images were found.")
+    print(f"Excluded music/vehicle entries: {skipped}")
+    print(f"Eligible shop entries: {len(items)}")
     return items
 
 
@@ -187,7 +205,7 @@ def split_into_pages(items):
 
 def download_image(url):
     try:
-        response = requests.get(url, timeout=20)
+        response = requests.get(url, timeout=25)
         response.raise_for_status()
         return Image.open(io.BytesIO(response.content)).convert("RGBA")
     except Exception as exc:
@@ -197,9 +215,8 @@ def download_image(url):
 
 def draw_header(img):
     draw = ImageDraw.Draw(img)
-    logo_size = 112
-    logo_x, logo_y = 42, 30
-    radius = 27
+    logo_size = 108
+    logo_x, logo_y = 38, 27
     if os.path.exists(LOGO_PATH):
         try:
             logo = Image.open(LOGO_PATH).convert("RGB")
@@ -209,29 +226,19 @@ def draw_header(img):
             logo = logo.crop((left, top, left + side, top + side))
             logo = logo.resize((logo_size, logo_size), Image.Resampling.LANCZOS).convert("RGBA")
             mask = Image.new("L", (logo_size, logo_size), 0)
-            ImageDraw.Draw(mask).rounded_rectangle(
-                (0, 0, logo_size - 1, logo_size - 1), radius=radius, fill=255
-            )
-            shadow = Image.new("RGBA", (logo_size + 18, logo_size + 18), (0, 0, 0, 0))
-            shadow_mask = Image.new("L", shadow.size, 0)
-            ImageDraw.Draw(shadow_mask).rounded_rectangle(
-                (8, 8, logo_size + 8, logo_size + 8), radius=radius, fill=105
-            )
-            shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(8))
-            shadow.putalpha(shadow_mask)
-            img.paste(shadow, (logo_x - 8, logo_y - 3), shadow)
+            ImageDraw.Draw(mask).rounded_rectangle((0, 0, logo_size - 1, logo_size - 1), radius=25, fill=255)
             img.paste(logo, (logo_x, logo_y), mask)
             draw = ImageDraw.Draw(img)
         except Exception as exc:
             print(f"Store logo could not be loaded: {exc}")
 
     name_x = logo_x + logo_size + 24
-    centered(draw, (name_x + 2, logo_y + 43), "Koinz.1", get_font(43, True), WHITE)
-    centered(draw, (name_x + 2, logo_y + 83), "Ø§ÙØ´ÙØ¨ Ø§ÙÙÙÙ", get_font(27, True), (215, 175, 255), arabic=True,
+    centered(draw, (name_x + 2, logo_y + 37), "Koinz.1", get_font(43, True), WHITE)
+    centered(draw, (name_x + 2, logo_y + 78), "شوب فورتنايت", get_font(27, True), (225, 205, 255), arabic=True,
              stroke_width=1, stroke_fill=(0, 0, 0))
-    draw.rounded_rectangle((35, 165, W - 35, 170), radius=3, fill=PURPLE)
-    centered(draw, (W // 2, 199), "Ø´ØÙ ÙÙØ¨ÙÙØ³ ØÙØ§ÙÙ Ø§ÙÙÙ Ø¹ÙØ®Ø§Øµ",
-             get_font(23, True), WHITE, arabic=True, stroke_width=1, stroke_fill=(0, 0, 0))
+    draw.rounded_rectangle((34, 155, W - 34, 161), radius=3, fill=PURPLE)
+    centered(draw, (W // 2, 192), "متجر فورتنايت اليومي", get_font(27, True), WHITE, arabic=True,
+             stroke_width=1, stroke_fill=(0, 0, 0))
 
 
 def fit_item_image(source, width, height):
@@ -247,173 +254,69 @@ def fit_item_image(source, width, height):
 
 
 def fit_name_font(draw, name, max_width):
-    for size in range(23, 11, -1):
+    for size in range(24, 13, -1):
         font = get_font(size, True)
         bbox = draw.textbbox((0, 0), name, font=font, stroke_width=0)
         if bbox[2] - bbox[0] <= max_width:
             return font
-    return get_font(12, True)
+    return get_font(13, True)
 
 
-def draw_item(img, item, index, rows, cols, layout):
-    left, right = 22, 22
-    gap_x, gap_y = 5, 5
+def draw_item(img, item, index, rows, cols, layout, image_cache):
+    left, right = 24, 24
+    gap_x, gap_y = 7, 7
     cell_w = (W - left - right - gap_x * (cols - 1)) // cols
     available_cell_h = (layout["height"] - gap_y * (rows - 1)) // rows
     cell_size = min(cell_w, available_cell_h)
     grid_height = rows * cell_size + (rows - 1) * gap_y
     top = layout["top"] + max(0, (layout["height"] - grid_height) // 2)
-    row = index // cols
-    col = index % cols
-    x = left + col * (cell_w + gap_x)
+    row, col = divmod(index, cols)
+    x = left + col * (cell_w + gap_x) + (cell_w - cell_size) // 2
     y = top + row * (cell_size + gap_y)
-    x += (cell_w - cell_size) // 2
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle(
-        (x, y, x + cell_size - 1, y + cell_size - 1),
-        radius=25, fill=(22, 17, 39), outline=(88, 47, 139), width=2
-    )
-    label_height = 35
-    image_top = y + 4
-    image_bottom = y + cell_size - label_height - 3
-    image_w = cell_size - 10
+
+    # Soft glass-like light card over the dark background.
+    card = Image.new("RGBA", (cell_size, cell_size), (245, 241, 255, 242))
+    card_draw = ImageDraw.Draw(card)
+    card_draw.rounded_rectangle((0, 0, cell_size - 1, cell_size - 1), radius=20,
+                                fill=(242, 239, 250, 242), outline=(255, 255, 255, 255), width=3)
+    img.paste(card, (x, y), card)
+
+    label_height = 33
+    pad = 5
+    image_top = y + pad
+    image_bottom = y + cell_size - label_height - 5
+    image_w = cell_size - pad * 2
     image_h = max(1, image_bottom - image_top)
-    source = download_image(item["image"])
-    if source:
-        icon_img = fit_item_image(source, image_w, image_h)
-        px = x + (cell_size - icon_img.width) // 2
-        py = image_top + (image_h - icon_img.height) // 2
-        img.paste(icon_img, (px, py), icon_img)
+    urls = item["images"]
+    loaded = []
+    for url in urls:
+        if url not in image_cache:
+            image_cache[url] = download_image(url)
+        if image_cache[url] is not None:
+            loaded.append(image_cache[url])
+
+    # Show multiple objects from the same bundle together in the same card.
+    if loaded:
+        if len(loaded) == 1:
+            fitted = fit_item_image(loaded[0], image_w, image_h)
+            img.paste(fitted, (x + pad, image_top), fitted)
+        else:
+            slots = min(4, len(loaded))
+            sub_w = (image_w - 4 * (slots - 1)) // slots
+            for j, source in enumerate(loaded[:slots]):
+                fitted = fit_item_image(source, sub_w, image_h)
+                px = x + pad + j * (sub_w + 4) + (sub_w - fitted.width) // 2
+                py = image_top + (image_h - fitted.height) // 2
+                img.paste(fitted, (px, py), fitted)
+
+    draw = ImageDraw.Draw(img)
     name = str(item["name"]).strip()
-    name_font = fit_name_font(draw, name, cell_size - 10)
-    centered(draw, (x + cell_size // 2, y + cell_size - label_height // 2),
-             name, name_font, WHITE, stroke_width=1, stroke_fill=(0, 0, 0))
-
-
-def cloudinary_upload(image_path):
-    """Upload an image using Cloudinary's signed upload API and return its public URL."""
-    cloud_name = os.environ.get("CLOUDINARY_CLOUD_NAME")
-    api_key = os.environ.get("CLOUDINARY_API_KEY")
-    api_secret = os.environ.get("CLOUDINARY_API_SECRET")
-    if not all((cloud_name, api_key, api_secret)):
-        raise RuntimeError(
-            "Missing Cloudinary secrets. Set CLOUDINARY_CLOUD_NAME, "
-            "CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in GitHub Actions."
-        )
-
-    timestamp = str(int(time.time()))
-    signature_base = f"timestamp={timestamp}{api_secret}"
-    signature = hashlib.sha1(signature_base.encode("utf-8")).hexdigest()
-    endpoint = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
-    with open(image_path, "rb") as image_file:
-        response = requests.post(
-            endpoint,
-            data={"timestamp": timestamp, "api_key": api_key, "signature": signature},
-            files={"file": image_file},
-            timeout=90,
-        )
-    try:
-        result = response.json()
-    except ValueError:
-        raise RuntimeError(f"Cloudinary returned non-JSON response (HTTP {response.status_code}).")
-    if not response.ok or not result.get("secure_url"):
-        raise RuntimeError(f"Cloudinary upload failed: {result}")
-    return result["secure_url"]
-
-
-def instagram_post_story(image_path, access_token, account_id):
-    public_url = cloudinary_upload(image_path)
-    print(f"Image uploaded to Cloudinary: {os.path.basename(image_path)}")
-
-    base_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{account_id}"
-    create_response = requests.post(
-        f"{base_url}/media",
-        data={"image_url": public_url, "media_type": "STORIES", "access_token": access_token},
-        timeout=60,
-    )
-    try:
-        create_data = create_response.json()
-    except ValueError:
-        raise RuntimeError(f"Instagram container response was not JSON: HTTP {create_response.status_code}")
-    if not create_response.ok or not create_data.get("id"):
-        raise RuntimeError(f"Instagram could not create the Story container: {create_data}")
-
-    creation_id = create_data["id"]
-    print(f"Story container created for {os.path.basename(image_path)}; waiting for processing...")
-
-    # Wait for Meta to finish fetching and processing the image before publishing.
-    status_url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{creation_id}"
-    ready = False
-    for attempt in range(12):
-        status_response = requests.get(
-            status_url,
-            params={"fields": "status_code,status", "access_token": access_token},
-            timeout=30,
-        )
-        try:
-            status_data = status_response.json()
-        except ValueError:
-            status_data = {}
-        if not status_response.ok or status_data.get("error"):
-            raise RuntimeError(f"Could not check Instagram container status: {status_data}")
-        status_code = str(status_data.get("status_code", "")).upper()
-        print(f"Instagram processing status ({attempt + 1}/12): {status_code or status_data.get('status', 'unknown')}")
-        if status_code == "FINISHED":
-            ready = True
-            break
-        if status_code in ("ERROR", "EXPIRED"):
-            raise RuntimeError(f"Instagram container failed: {status_data}")
-        time.sleep(5)
-    if not ready:
-        raise RuntimeError("Instagram did not finish processing the Story within 60 seconds.")
-
-    publish_response = requests.post(
-        f"{base_url}/media_publish",
-        data={"creation_id": creation_id, "access_token": access_token},
-        timeout=60,
-    )
-    try:
-        publish_data = publish_response.json()
-    except ValueError:
-        raise RuntimeError(f"Instagram publish response was not JSON: HTTP {publish_response.status_code}")
-    if not publish_response.ok or not publish_data.get("id"):
-        raise RuntimeError(f"Instagram failed to publish the Story: {publish_data}")
-    print(f"SUCCESS: Published {os.path.basename(image_path)} as Instagram Story. ID: {publish_data['id']}")
-
-
-def post_to_instagram():
-    access_token = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
-    account_id = os.environ.get("INSTAGRAM_ACCOUNT_ID")
-    if not access_token or not account_id:
-        raise RuntimeError(
-            "Instagram secrets are missing. Add INSTAGRAM_ACCESS_TOKEN and "
-            "INSTAGRAM_ACCOUNT_ID to GitHub Actions secrets and pass both to the workflow."
-        )
-
-    if not os.path.isdir(OUT_DIR):
-        raise RuntimeError(f"Stories directory not found: {OUT_DIR}")
-    image_files = sorted(
-        os.path.join(OUT_DIR, filename)
-        for filename in os.listdir(OUT_DIR)
-        if filename.lower().endswith((".jpg", ".jpeg", ".png"))
-    )
-    if not image_files:
-        raise RuntimeError("No story images found to publish.")
-
-    print(f"Publishing {len(image_files)} image(s) to Instagram Stories...")
-    failures = []
-    for index, image_path in enumerate(image_files, start=1):
-        print(f"Publishing Story {index}/{len(image_files)}: {image_path}")
-        try:
-            instagram_post_story(image_path, access_token, account_id)
-        except Exception as exc:
-            failures.append(f"{image_path}: {exc}")
-            print(f"FAILED to publish {image_path}: {exc}")
-        if index < len(image_files):
-            time.sleep(5)
-    if failures:
-        raise RuntimeError("One or more Stories failed to publish:\n" + "\n".join(failures))
-    print("All Story images published successfully.")
+    # Long bundle names are shortened so the title remains legible at story size.
+    if len(name) > 28:
+        name = name[:26].rstrip() + "…"
+    name_font = fit_name_font(draw, name, cell_size - 12)
+    centered(draw, (x + cell_size // 2, y + cell_size - label_height // 2), name,
+             name_font, (24, 20, 34), stroke_width=0)
 
 
 def main():
@@ -427,8 +330,8 @@ def main():
 
     items = load_items()
     pages = split_into_pages(items)
-    total_pages = len(pages)
-    print(f"Generating {total_pages} story images, with a maximum of {MAX_ROWS} rows each...")
+    print(f"Generating {len(pages)} story image(s), maximum {MAX_ROWS} rows each...")
+    image_cache = {}
 
     for page_num, page_items in enumerate(pages, start=1):
         img = make_background()
@@ -436,16 +339,17 @@ def main():
         rows = max(1, math.ceil(len(page_items) / COLS))
         if rows > MAX_ROWS:
             raise RuntimeError(f"Page {page_num} has {rows} rows; maximum is {MAX_ROWS}.")
-        layout = {"top": 220, "height": 1675}
+        layout = {"top": 220, "height": 1665}
         for index, item in enumerate(page_items):
-            draw_item(img, item, index, rows, COLS, layout)
+            draw_item(img, item, index, rows, COLS, layout, image_cache)
         output = os.path.join(OUT_DIR, f"shop-{page_num:02d}.jpg")
-        img.save(output, "JPEG", quality=94, optimize=True)
-        print(f"Saved {output}: {len(page_items)} items, {rows} rows")
+        img.save(output, "JPEG", quality=97, subsampling=0, optimize=True)
+        print(f"Saved {output}: {len(page_items)} entries, {rows} rows")
 
-    print(f"Done: {total_pages} story images generated.")
-    post_to_instagram()
+    print(f"Done: {len(pages)} story image(s) generated.")
+    print("Manual mode: download the 'fortnite-shop-stories' artifact from GitHub Actions and post the images to Instagram Stories.")
 
 
 if __name__ == "__main__":
     main()
+    
